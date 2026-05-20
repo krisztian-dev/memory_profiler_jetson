@@ -954,6 +954,27 @@ def show_results(prof, stream=None, precision=1):
             stream.write(tmp)
         stream.write(u'\n\n')
 
+    # Warn user if swap is enabled
+    try:
+        swap = psutil.swap_memory()
+        if swap.total > 0:
+            warn_border = u'#' * 70
+            warn_excl = u'!' * 70
+            stream.write(u'\n')
+            stream.write(warn_border + u'\n')
+            stream.write(warn_excl + u'\n')
+            stream.write(warn_border + u'\n')
+            stream.write(u'!!!  WARNING: SWAP IS ENABLED ON THIS SYSTEM  !!!\n')
+            stream.write(u'!!!  Memory profiling results may be inaccurate when swap is active.\n')
+            stream.write(u'!!!  Swap total: %.2f MiB, Swap used: %.2f MiB\n' % (
+                swap.total / _TWO_20, swap.used / _TWO_20))
+            stream.write(warn_border + u'\n')
+            stream.write(warn_excl + u'\n')
+            stream.write(warn_border + u'\n')
+            stream.write(u'\n')
+    except (AttributeError, OSError):
+        pass
+
 
 def _func_exec(stmt, ns):
     # helper for magic_memit, just a function proxy for the exec
