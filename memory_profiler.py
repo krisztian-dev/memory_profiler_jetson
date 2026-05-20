@@ -737,15 +737,18 @@ class CodeMap(dict):
         previous_memory = prev_value[1] if prev_value else 0
         previous_inc = prev_value[0] if prev_value else 0
         previous_nvmap = prev_value[3] if prev_value else 0
+        previous_nvmap_inc = prev_value[4] if prev_value and len(prev_value) > 4 else 0
 
         prev_line_value = self[code].get(prev_lineno, None) if prev_lineno else None
         prev_line_memory = prev_line_value[1] if prev_line_value else 0
+        prev_line_nvmap = prev_line_value[3] if prev_line_value and len(prev_line_value) > 3 else 0
         occ_count = self[code][lineno][2] + 1 if lineno in self[code] else 1
         self[code][lineno] = (
             previous_inc + (memory - prev_line_memory),
             max(memory, previous_memory),
             occ_count,
             max(nvmap_mem, previous_nvmap),
+            previous_nvmap_inc + (nvmap_mem - prev_line_nvmap),
         )
 
     def items(self):
@@ -915,11 +918,11 @@ class LineProfiler(object):
 def show_results(prof, stream=None, precision=1):
     if stream is None:
         stream = sys.stdout
-    template = '{0:>6} {1:>12} {2:>12}  {3:>12}  {4:>10}   {5:<}'
+    template = '{0:>6} {1:>12} {2:>12}  {3:>12}  {4:>12}  {5:>10}   {6:<}'
 
     for (filename, lines) in prof.code_map.items():
         header = template.format('Line #', 'Mem usage', 'Increment', 'NvMap',
-                                 'Occurrences', 'Line Contents')
+                                 'NvMap Inc', 'Occurrences', 'Line Contents')
 
         stream.write(u'Filename: ' + filename + '\n\n')
         stream.write(header + u'\n')
@@ -936,15 +939,18 @@ def show_results(prof, stream=None, precision=1):
                 total_mem = template_mem.format(total_mem)
                 occurrences = mem[2]
                 nvmap_mem = mem[3] if len(mem) > 3 else 0
+                nvmap_inc = mem[4] if len(mem) > 4 else 0
                 inc = template_mem.format(inc)
                 nvmap_mem = template_mem.format(nvmap_mem)
+                nvmap_inc = template_mem.format(nvmap_inc)
             else:
                 total_mem = u''
                 inc = u''
                 occurrences = u''
                 nvmap_mem = u''
-            tmp = template.format(lineno, total_mem, inc, nvmap_mem, occurrences,
-                                  all_lines[lineno - 1])
+                nvmap_inc = u''
+            tmp = template.format(lineno, total_mem, inc, nvmap_mem, nvmap_inc,
+                                  occurrences, all_lines[lineno - 1])
             stream.write(tmp)
         stream.write(u'\n\n')
 
