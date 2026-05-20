@@ -17,6 +17,7 @@ import linecache
 import logging
 import os
 import io
+from pathlib import Path
 import pdb
 import subprocess
 import sys
@@ -112,6 +113,64 @@ def _get_child_memory(process, meminfo_attr=None, memory_metric=0):
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         # https://github.com/fabianp/memory_profiler/issues/71
         yield (0, 0.0)
+
+
+def _get_nvmap_memory(pid=-1):
+    """
+    Return the nvmap memory usage in MiB for the given process on Jetson devices.
+
+    Reads from the kernel debug filesystem to get NVIDIA memory map allocations.
+    Returns 0.0 if nvmap information is not available (non-Jetson platform or
+    insufficient permissions).
+
+    Parameters
+    ----------
+    pid : int, optional
+        The process ID to query. Use -1 (default) for the current process.
+
+    Returns
+    -------
+    float
+        nvmap memory usage in MiB.
+    """
+    if pid == -1:
+        pid = os.getpid()
+
+    nvmap_paths = [
+        Path('/sys/kernel/debug/nvmap/iovmm/clients'),
+        Path('/sys/kernel/debug/nvmap/clients'),
+    ]
+
+    for nvmap_path in nvmap_paths:
+        if not nvmap_path.exists():
+            continue
+        try:
+            content = nvmap_path.read_text()
+        except (PermissionError, OSError):
+            continue
+
+        total_bytes = 0
+        for line in content.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+
+            try:
+                line_pid = int(parts[2])
+            except (IndexError, ValueError):
+                continue
+            if line_pid != pid:
+                continue
+            try:
+                size_str = parts[3].rstrip('Kk')
+                size_kb = int(size_str)
+            except (IndexError, ValueError):
+                continue
+            total_bytes += size_kb * 1024
+
+        return total_bytes / _TWO_20
+
+    return 0.0
 
 
 def _get_memory(pid, backend, timestamps=False, include_children=False, filename=None):
@@ -673,9 +732,11 @@ class CodeMap(dict):
     def trace(self, code, lineno, prev_lineno):
         memory = _get_memory(-1, self.backend, include_children=self.include_children,
                              filename=code.co_filename)
+        nvmap_mem = _get_nvmap_memory(-1)
         prev_value = self[code].get(lineno, None)
         previous_memory = prev_value[1] if prev_value else 0
         previous_inc = prev_value[0] if prev_value else 0
+        previous_nvmap = prev_value[3] if prev_value else 0
 
         prev_line_value = self[code].get(prev_lineno, None) if prev_lineno else None
         prev_line_memory = prev_line_value[1] if prev_line_value else 0
@@ -684,6 +745,7 @@ class CodeMap(dict):
             previous_inc + (memory - prev_line_memory),
             max(memory, previous_memory),
             occ_count,
+            max(nvmap_mem, previous_nvmap),
         )
 
     def items(self):
@@ -853,11 +915,11 @@ class LineProfiler(object):
 def show_results(prof, stream=None, precision=1):
     if stream is None:
         stream = sys.stdout
-    template = '{0:>6} {1:>12} {2:>12}  {3:>10}   {4:<}'
+    template = '{0:>6} {1:>12} {2:>12}  {3:>12}  {4:>10}   {5:<}'
 
     for (filename, lines) in prof.code_map.items():
-        header = template.format('Line #', 'Mem usage', 'Increment', 'Occurrences',
-                                 'Line Contents')
+        header = template.format('Line #', 'Mem usage', 'Increment', 'NvMap',
+                                 'Occurrences', 'Line Contents')
 
         stream.write(u'Filename: ' + filename + '\n\n')
         stream.write(header + u'\n')
@@ -873,12 +935,16 @@ def show_results(prof, stream=None, precision=1):
                 total_mem = mem[1]
                 total_mem = template_mem.format(total_mem)
                 occurrences = mem[2]
+                nvmap_mem = mem[3] if len(mem) > 3 else 0
                 inc = template_mem.format(inc)
+                nvmap_mem = template_mem.format(nvmap_mem)
             else:
                 total_mem = u''
                 inc = u''
                 occurrences = u''
-            tmp = template.format(lineno, total_mem, inc, occurrences, all_lines[lineno - 1])
+                nvmap_mem = u''
+            tmp = template.format(lineno, total_mem, inc, nvmap_mem, occurrences,
+                                  all_lines[lineno - 1])
             stream.write(tmp)
         stream.write(u'\n\n')
 
